@@ -2,8 +2,10 @@ import React, { useEffect, useState } from "react";
 import shuffle from "lodash/shuffle";
 
 const TMDB_API_KEY = import.meta.env.VITE_TMDB_API_KEY;
-const TMDB_POPULAR_URL = `https://api.themoviedb.org/3/movie/popular?api_key=${TMDB_API_KEY}`;
+const TMDB_POPULAR_URL = (language = 'en-US') => `https://api.themoviedb.org/3/movie/popular?api_key=${TMDB_API_KEY}&language=${language}`;
+const TMDB_MOVIE_DETAILS_URL = (movieId, language = 'en-US') => `https://api.themoviedb.org/3/movie/${movieId}?api_key=${TMDB_API_KEY}&language=${language}`;
 const TMDB_IMAGES_URL = (movieId) => `https://api.themoviedb.org/3/movie/${movieId}/images?api_key=${TMDB_API_KEY}`;
+const TMDB_LANGUAGES_URL = `https://api.themoviedb.org/3/configuration/languages?api_key=${TMDB_API_KEY}`;
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w500";
 
 export default function MovieQuiz() {
@@ -16,6 +18,9 @@ export default function MovieQuiz() {
   const [isSoundEnabled, setIsSoundEnabled] = useState(true);
   const [correctCount, setCorrectCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
+  const [selectedLanguage, setSelectedLanguage] = useState('en-US');
+  const [languages, setLanguages] = useState([]);
+  const [showLanguageSelector, setShowLanguageSelector] = useState(false);
 
   // Function to play success sound
   const playSuccessSound = () => {
@@ -84,6 +89,81 @@ export default function MovieQuiz() {
   // Function to toggle sound on/off
   const toggleSound = () => {
     setIsSoundEnabled(!isSoundEnabled);
+  };
+
+  // Function to fetch available languages (cached)
+  const fetchLanguages = async () => {
+    if (languages.length > 0) return; // Already cached
+    
+    try {
+      const res = await fetch(TMDB_LANGUAGES_URL);
+      const data = await res.json();
+      
+      // Filter to show only popular languages to avoid overwhelming the user
+      const popularLanguages = [
+        { iso_639_1: 'en', english_name: 'English', name: 'English' },
+        { iso_639_1: 'es', english_name: 'Spanish', name: 'Español' },
+        { iso_639_1: 'fr', english_name: 'French', name: 'Français' },
+        { iso_639_1: 'de', english_name: 'German', name: 'Deutsch' },
+        { iso_639_1: 'it', english_name: 'Italian', name: 'Italiano' },
+        { iso_639_1: 'pt', english_name: 'Portuguese', name: 'Português' },
+        { iso_639_1: 'ru', english_name: 'Russian', name: 'Pусский' },
+        { iso_639_1: 'ja', english_name: 'Japanese', name: '日本語' },
+        { iso_639_1: 'ko', english_name: 'Korean', name: '한국어' },
+        { iso_639_1: 'zh', english_name: 'Chinese', name: '中文' },
+        { iso_639_1: 'hi', english_name: 'Hindi', name: 'हिन्दी' },
+        { iso_639_1: 'ar', english_name: 'Arabic', name: 'العربية' }
+      ];
+      
+      setLanguages(popularLanguages);
+    } catch (error) {
+      console.error("Failed to fetch languages:", error);
+      // Fallback to English only
+      setLanguages([{ iso_639_1: 'en', english_name: 'English', name: 'English' }]);
+    }
+  };
+
+  // Function to handle language change
+  const handleLanguageChange = async (languageCode) => {
+    const newLanguage = languageCode === 'en' ? 'en-US' : languageCode;
+    setSelectedLanguage(newLanguage);
+    setShowLanguageSelector(false);
+    
+    // If we have a current question, translate it to the new language
+    if (question && question.options) {
+      try {
+        // Get translated titles for all current options
+        const translatedOptions = await Promise.all(
+          question.options.map(async (option) => {
+            const movieDetailsRes = await fetch(TMDB_MOVIE_DETAILS_URL(option.id, newLanguage));
+            const movieDetails = await movieDetailsRes.json();
+            return {
+              ...option,
+              title: movieDetails.title || option.title // Fallback to original if translation fails
+            };
+          })
+        );
+        
+        // Update the question with translated options and answer
+        const correctOption = translatedOptions.find(opt => opt.id === question.correctId);
+        
+        setQuestion(prev => ({
+          ...prev,
+          options: translatedOptions,
+          answer: correctOption ? correctOption.title : prev.answer
+        }));
+        
+        // Reset selection state since options have changed
+        setSelected(null);
+        setFeedback("");
+        setIsCorrect(null);
+      } catch (error) {
+        console.error("Failed to translate current question:", error);
+      }
+    }
+    
+    // Reset used movies for future questions in the new language
+    setUsedMovieIds(new Set());
   };
 
   // Function to extract dominant colors from image and create background
@@ -180,10 +260,10 @@ export default function MovieQuiz() {
     img.src = imageSrc;
   };
 
-  const fetchQuestion = async () => {
+  const fetchQuestion = async (language = selectedLanguage) => {
     try {
       // First, get popular movies to choose from
-      const res = await fetch(TMDB_POPULAR_URL);
+      const res = await fetch(TMDB_POPULAR_URL(language));
       const data = await res.json();
       const movies = data.results;
       
@@ -224,6 +304,7 @@ export default function MovieQuiz() {
         image: movieImage,
         answer: correct.title,
         options,
+        correctId: correct.id // Store the correct movie ID for translation purposes
       });
       setSelected(null);
       setFeedback("");
@@ -239,6 +320,7 @@ export default function MovieQuiz() {
   };
 
   useEffect(() => {
+    fetchLanguages();
     fetchQuestion();
   }, []);
 
@@ -279,7 +361,7 @@ export default function MovieQuiz() {
 
   return (
     <div 
-      className="flex flex-col items-center justify-center min-h-screen p-2 sm:p-4 lg:p-6 space-y-4 transition-all duration-1000 ease-in-out relative"
+      className="flex flex-col items-center justify-center min-h-screen p-1 sm:p-2 lg:p-4 space-y-2 sm:space-y-3 transition-all duration-1000 ease-in-out relative"
       style={{ 
         background: backgroundGradient,
         backgroundAttachment: 'fixed'
@@ -304,22 +386,52 @@ export default function MovieQuiz() {
         )}
       </button>
 
-      {/* Score Counter */}
-      <div className="fixed top-2 left-2 sm:top-4 sm:left-4 z-10 bg-white/90 backdrop-blur-sm rounded-lg shadow-lg border border-white/20 px-3 py-2 sm:px-4 sm:py-3">
-        <div className="flex items-center space-x-2">
-          <span className="text-gray-700 font-semibold text-sm sm:text-base">Score:</span>
-          <span className="text-blue-600 font-bold text-lg sm:text-xl">{correctCount}</span>
-          <span className="text-gray-500 font-medium text-sm sm:text-base">/</span>
-          <span className="text-gray-600 font-semibold text-lg sm:text-xl">{totalCount}</span>
+      {/* Score Counter and Language Selector */}
+      <div className="fixed top-2 left-2 sm:top-4 sm:left-4 z-10 flex flex-col space-y-2">
+        <div className="bg-white/90 backdrop-blur-sm rounded-lg shadow-lg border border-white/20 px-3 py-2 sm:px-4 sm:py-3">
+          <div className="flex items-center space-x-2">
+            <span className="text-gray-700 font-semibold text-sm sm:text-base">Score:</span>
+            <span className="text-blue-600 font-bold text-lg sm:text-xl">{correctCount}</span>
+            <span className="text-gray-500 font-medium text-sm sm:text-base">/</span>
+            <span className="text-gray-600 font-semibold text-lg sm:text-xl">{totalCount}</span>
+          </div>
+        </div>
+        
+        {/* Language Selector */}
+        <div className="relative">
+          {showLanguageSelector && (
+            <div className="absolute top-full left-0 mt-1 bg-white/95 backdrop-blur-sm rounded-lg shadow-lg border border-white/20 p-2 max-h-48 overflow-y-auto min-w-32">
+              {languages.map((lang) => (
+                <button
+                  key={lang.iso_639_1}
+                  onClick={() => handleLanguageChange(lang.iso_639_1)}
+                  className={`w-full text-left px-3 py-2 rounded text-sm hover:bg-blue-50 transition-colors ${
+                    (selectedLanguage === lang.iso_639_1 || selectedLanguage === 'en-US' && lang.iso_639_1 === 'en')
+                      ? 'bg-blue-100 text-blue-700 font-semibold'
+                      : 'text-gray-700'
+                  }`}
+                >
+                  {lang.english_name}
+                </button>
+              ))}
+            </div>
+          )}
+          <button
+            onClick={() => setShowLanguageSelector(!showLanguageSelector)}
+            className="bg-white/90 backdrop-blur-sm hover:bg-white text-gray-700 hover:text-gray-900 px-3 py-2 rounded-lg shadow-lg border border-white/20 transition-all duration-200 hover:scale-105 text-sm font-semibold"
+            title="Change language"
+          >
+            🌐 {languages.find(lang => lang.iso_639_1 === selectedLanguage.split('-')[0])?.english_name || 'English'}
+          </button>
         </div>
       </div>
 
       <div className="w-full max-w-xs sm:max-w-sm md:max-w-md lg:max-w-lg xl:max-w-xl bg-white/95 backdrop-blur-sm rounded-xl shadow-lg overflow-hidden border border-white/20 mx-auto">
-        <div className="flex flex-col items-center p-3 sm:p-4 md:p-6">
+        <div className="flex flex-col items-center p-2 sm:p-3 md:p-4">
           <img
             src={`${TMDB_IMAGE_BASE}${question.image}`}
             alt="movie poster"
-            className={`w-full max-w-sm rounded transition-all duration-500 ${
+            className={`w-full max-w-xs sm:max-w-sm rounded transition-all duration-500 ${
               isCorrect === true 
                 ? 'border-4 border-green-500 shadow-lg shadow-green-500/50' 
                 : isCorrect === false 
@@ -327,7 +439,7 @@ export default function MovieQuiz() {
                 : 'border-2 border-transparent'
             }`}
           />
-          <div className="mt-3 sm:mt-4 w-full">
+          <div className="mt-2 sm:mt-3 w-full">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
               {question.options.map((opt, index) => (
                 <button
@@ -344,7 +456,7 @@ export default function MovieQuiz() {
             </div>
           </div>
           {feedback && (
-            <p className={`mt-3 sm:mt-4 text-base sm:text-lg font-semibold text-center transition-all duration-300 ${
+            <p className={`mt-2 sm:mt-3 text-base sm:text-lg font-semibold text-center transition-all duration-300 ${
               isCorrect === true ? 'text-green-600' : 'text-red-600'
             }`}>
               {feedback}
