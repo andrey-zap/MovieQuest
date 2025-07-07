@@ -42,9 +42,9 @@ run: ## Run the container
 		--restart unless-stopped \
 		$(IMAGE_NAME):latest
 
-dev: ## Start development environment
+dev: check-env ## Start development environment
 	@echo "Starting development environment with $(DOCKER_COMPOSE_CMD)..."
-	$(DOCKER_COMPOSE_CMD) -f docker-compose.yml -f docker-compose.dev.yml up --build
+	VITE_TMDB_API_KEY=$(VITE_TMDB_API_KEY) $(DOCKER_COMPOSE_CMD) -f docker-compose.yml -f docker-compose.dev.yml up --build
 
 prod: ## Start production environment
 	@echo "Starting production environment with $(DOCKER_COMPOSE_CMD)..."

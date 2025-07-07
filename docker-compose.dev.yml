@@ -6,6 +6,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: builder
+      args:
+        - VITE_TMDB_API_KEY=${VITE_TMDB_API_KEY}
     volumes:
       - .:/app
       - /app/node_modules
