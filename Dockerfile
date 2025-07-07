@@ -1,4 +1,4 @@
-# Simple multi-stage build
+# Multi-stage build with environment variable support
 FROM node:20-alpine AS builder
 
 WORKDIR /app
@@ -12,7 +12,12 @@ RUN npm install
 # Copy source code
 COPY . .
 
-# Build the app
+# Accept build argument for TMDB API key
+# VITE_ prefixed env vars are client-side by design and safe to expose
+ARG VITE_TMDB_API_KEY
+ENV VITE_TMDB_API_KEY=$VITE_TMDB_API_KEY
+
+# Build the app (Vite will use the environment variable)
 RUN npm run build
 
 # Production stage

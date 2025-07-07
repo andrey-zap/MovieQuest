@@ -13,7 +13,7 @@ else
 	DOCKER_COMPOSE_CMD := docker-compose
 endif
 
-.PHONY: help build run dev stop clean push security-scan
+.PHONY: help check-env build run dev stop clean push security-scan
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -21,13 +21,18 @@ help: ## Show this help message
 	@echo 'Targets:'
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: ## Build the Docker image
-	@echo "Building $(IMAGE_NAME):$(VERSION)..."
-	docker build -t $(IMAGE_NAME):$(VERSION) -t $(IMAGE_NAME):latest .
+check-env:
+	@if [ -z "$(VITE_TMDB_API_KEY)" ]; then \
+		echo "Error: VITE_TMDB_API_KEY environment variable is required"; \
+		echo "Set it with: export VITE_TMDB_API_KEY=your_api_key"; \
+		exit 1; \
+	fi
 
-build-no-cache: ## Build the Docker image without cache
-	@echo "Building $(IMAGE_NAME):$(VERSION) without cache..."
-	docker build --no-cache -t $(IMAGE_NAME):$(VERSION) -t $(IMAGE_NAME):latest .
+build: check-env ## Build the Docker image
+	docker build --build-arg VITE_TMDB_API_KEY=$(VITE_TMDB_API_KEY) -t $(IMAGE_NAME):$(VERSION) -t $(IMAGE_NAME):latest .
+
+build-no-cache: check-env ## Build the Docker image without cache
+	docker build --no-cache --build-arg VITE_TMDB_API_KEY=$(VITE_TMDB_API_KEY) -t $(IMAGE_NAME):$(VERSION) -t $(IMAGE_NAME):latest .
 
 run: ## Run the container
 	@echo "Running $(IMAGE_NAME) on port $(HOST_PORT)..."
@@ -63,8 +68,8 @@ security-scan: ## Run security scan on the image
 	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
 		aquasec/trivy image $(IMAGE_NAME):latest
 
-push: build ## Build and push to registry
-	@echo "Pushing $(IMAGE_NAME):$(VERSION)..."
+push: check-env ## Build and push to registry
+	docker build --build-arg VITE_TMDB_API_KEY=$(VITE_TMDB_API_KEY) -t $(IMAGE_NAME):$(VERSION) -t $(IMAGE_NAME):latest .
 	docker push $(IMAGE_NAME):$(VERSION)
 	docker push $(IMAGE_NAME):latest
 
