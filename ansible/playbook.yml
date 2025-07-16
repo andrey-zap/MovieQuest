@@ -1,0 +1,238 @@
+---
+- name: Setup secure web server and deploy movie quiz app
+  hosts: movie_quiz_servers
+  become: yes
+  vars:
+    app_name: movie-quiz-app
+    app_user: moviequiz
+    app_dir: /opt/movie-quiz
+    domain_name: "{{ ansible_host }}"  # Override with your domain
+    ssl_email: "admin@{{ domain_name }}"
+    github_repo: "{{ github_repository | default('your-username/aiQuiz') }}"
+    
+  tasks:
+    - name: Update system packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+        autoremove: yes
+        autoclean: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Install required packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - ufw
+          - nginx
+          - certbot
+          - python3-certbot-nginx
+          - fail2ban
+          - unattended-upgrades
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Create app user
+      user:
+        name: "{{ app_user }}"
+        system: yes
+        shell: /bin/bash
+        home: "{{ app_dir }}"
+        create_home: yes
+
+    - name: Add Docker's official GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+
+    - name: Install Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+
+    - name: Add app user to docker group
+      user:
+        name: "{{ app_user }}"
+        groups: docker
+        append: yes
+
+    - name: Start and enable Docker service
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Configure UFW firewall
+      ufw:
+        rule: "{{ item.rule }}"
+        port: "{{ item.port }}"
+        proto: "{{ item.proto | default('tcp') }}"
+      loop:
+        - { rule: "allow", port: "22" }
+        - { rule: "allow", port: "80" }
+        - { rule: "allow", port: "443" }
+      notify: enable ufw
+
+    - name: Configure rate limiting in nginx.conf
+      template:
+        src: nginx-rate-limit.conf.j2
+        dest: /etc/nginx/conf.d/rate-limit.conf
+        backup: yes
+      notify: restart nginx
+
+    - name: Configure Nginx site
+      template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/sites-available/{{ app_name }}
+        backup: yes
+      notify: restart nginx
+
+    - name: Enable Nginx site
+      file:
+        src: /etc/nginx/sites-available/{{ app_name }}
+        dest: /etc/nginx/sites-enabled/{{ app_name }}
+        state: link
+      notify: restart nginx
+
+    - name: Remove default Nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: restart nginx
+
+    - name: Test Nginx configuration
+      command: nginx -t
+      register: nginx_test
+      failed_when: nginx_test.rc != 0
+
+    - name: Start and enable Nginx
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Create app directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0755'
+      loop:
+        - "{{ app_dir }}"
+        - "{{ app_dir }}/config"
+        - "{{ app_dir }}/logs"
+
+    - name: Copy docker-compose file
+      copy:
+        src: docker-compose.prod.yml
+        dest: "{{ app_dir }}/docker-compose.yml"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0644'
+      notify: restart app
+
+    - name: Create environment file
+      template:
+        src: env.j2
+        dest: "{{ app_dir }}/.env"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0600'
+      notify: restart app
+
+    - name: Create systemd service for the app
+      template:
+        src: movie-quiz.service.j2
+        dest: /etc/systemd/system/movie-quiz.service
+        mode: '0644'
+      notify:
+        - reload systemd
+        - restart app
+
+    - name: Configure fail2ban for SSH
+      copy:
+        content: |
+          [DEFAULT]
+          bantime = 3600
+          findtime = 600
+          maxretry = 5
+          
+          [sshd]
+          enabled = true
+          port = ssh
+          filter = sshd
+          logpath = /var/log/auth.log
+          maxretry = 3
+        dest: /etc/fail2ban/jail.local
+        backup: yes
+      notify: restart fail2ban
+
+    - name: Configure automatic updates
+      copy:
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+          APT::Periodic::AutocleanInterval "7";
+          Unattended-Upgrade::Remove-Unused-Dependencies "true";
+          Unattended-Upgrade::Automatic-Reboot "false";
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        backup: yes
+
+    - name: Obtain SSL certificate
+      command: >
+        certbot --nginx -d {{ domain_name }} 
+        --non-interactive --agree-tos --email {{ ssl_email }}
+        --redirect
+      register: certbot_result
+      failed_when: certbot_result.rc != 0 and 'already exists' not in certbot_result.stderr
+      when: domain_name != ansible_host
+
+    - name: Setup SSL certificate renewal
+      cron:
+        name: "renew ssl certificates"
+        minute: "0"
+        hour: "2"
+        job: "certbot renew --quiet && systemctl reload nginx"
+        user: root
+
+  handlers:
+    - name: enable ufw
+      ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
+
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+
+    - name: restart fail2ban
+      systemd:
+        name: fail2ban
+        state: restarted
+
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: restart app
+      systemd:
+        name: movie-quiz
+        state: restarted
+        enabled: yes

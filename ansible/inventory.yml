@@ -1,0 +1,8 @@
+[movie_quiz_servers]
+vultr-web ansible_host=64.177.65.235 ansible_user=root
+
+# [movie_quiz_servers:vars]
+# # Override these variables as needed
+# domain_name=your-domain.com
+# ssl_email=admin@your-domain.com
+# github_repository=your-username/aiQuiz
